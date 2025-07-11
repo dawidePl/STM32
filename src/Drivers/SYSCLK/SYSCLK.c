@@ -130,7 +130,7 @@ uint32_t get_sys_clk_freq() {
 // void delay_short(uint32_t time, TIM_Typedef tim);
 // void delay_long(uint32_t time, TIM_Typedef tim);
 
-TIM_Typedef* get_available_tim_long();
+TIM_Typedef* get_available_tim();
 
 void wait(uint32_t time, TIM_Typedef* tim);
 
@@ -139,6 +139,7 @@ void wait(uint32_t time, TIM_Typedef* tim);
 
     TODO: for whatever reason delay is 4 times too fast.
     TODO: turn off TIMx RCC clock after delay ends, not after each wait() call.
+    TODO: if get_available_tim() returns (void*)0, force-use TIM5.
 
     @param uint32_t time Time in milliseconds.
 */
@@ -147,7 +148,7 @@ void delay(uint32_t time) {
 
     TIM_Typedef* tim;
 
-    if(time > 30000) tim = get_available_tim_long();
+    tim = get_available_tim();
 
     uint32_t max_time = 4000000;
     uint32_t loop_ammount = (uint32_t)(time / max_time);
@@ -161,7 +162,7 @@ void delay(uint32_t time) {
 /*
     Get either TIM2 or TIM5, depending on which one is available to use.
 */
-TIM_Typedef* get_available_tim_long() {
+TIM_Typedef* get_available_tim() {
     // Check by RCC bus, TIM with disabled RCC bus is free to use
     if((RCC->APB1ENR & 0x1) == 0) return TIM2;
     if((RCC->APB1ENR & 0b1000) == 0) return TIM5;
@@ -170,7 +171,8 @@ TIM_Typedef* get_available_tim_long() {
     if((TIM2->CR1 & 0x1) == 0) return TIM2; // TIM2 CR1 CEN bit is set to 0 meaning it's not in use
     if((TIM5->CR1 & 0x1) == 0) return TIM5; // TIM5 CR1 CEN bit is set to 0 meaning it's not in use
 
-    return ((void*)0);
+    // TIM2 is in use, so is TIM5. For now - force TIM5 to be used
+    return TIM5;
 }
 
 /*
