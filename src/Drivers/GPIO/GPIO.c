@@ -32,7 +32,7 @@ void initialize_gpio_pin(GPIO_Bus_t bus, uint8_t pin_number, bool input) {
     if(bus > GPIOD_en) return; // Handle incorrect bus
 
     // Check if given bus is turned on, if not - turn it on
-    if(((RCC_AHB1ENR >> bus) & 0x1) != 0x1)
+    if(((RCC->AHB1ENR >> bus) & 0x1) != 0x1)
         initialize_gpio_bus(bus);
 
     if(input == false)
@@ -85,6 +85,7 @@ void gpio_set(GPIO_Bus_t bus, uint8_t pin_number, bool value) {
 
     volatile GPIO_Typedef* gpio = get_bus(bus);
 
+    // If not initialized as output
     if(((gpio->MODER >> (pin_number * 2)) & 0x3) != 0x1)
         initialize_gpio_pin(bus, pin_number, false);
     

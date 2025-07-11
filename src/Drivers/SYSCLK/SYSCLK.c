@@ -1,4 +1,6 @@
 #include "Drivers/SYSCLK/sysclk.h"
+#include "Drivers/GPIO/GPIO.h"
+#include "Drivers/Memory/FLASH.h"
 
 /*
     STM32 reference, https://www.st.com/resource/en/reference_manual/rm0383-stm32f411xce-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
@@ -6,48 +8,108 @@
 */
 
 /*
+    Initialize PLL clock, use HSI for input, set on 84 MHz.
+*/
+void initialize_pll_clk() {
+    // Turn on HSI
+    RCC->CR |= 0x1;
+    while(!(RCC->CR & (1 << 1))); // wait for HSI
+
+    // Switch to HSI
+    RCC->CFGR &= ~0x3;
+    RCC->CFGR |= 0x0; // HSI selected
+    while(((RCC->CFGR >> 2) & 0x3) != 0);
+
+    RCC->CR &= ~(0x1 << 24); // PLL off
+    while(RCC->CR & (0x1 << 25)); // Wait for PLLRDY = 0
+
+    // PLLM = 16 (bits 5:0)
+    // PLLN = 168 (bits 14:6)
+    // PLLP = 2 (encoded as 0b00 at bits 17:16)
+    // PLLSRC = 0 (HSI) bit 22
+    // PLLQ = 4 (bits 27:24)
+    uint32_t pllm = 16;
+    uint32_t plln = 168;
+    uint32_t pllp = 0; // 00b for divide by 2
+    uint32_t pllsrc = 0; // HSI
+    uint32_t pllq = 4;
+
+    RCC->PLLCFGR = 0;
+
+    RCC->PLLCFGR = (pllm & 0x3F)         // PLLM bits 5:0
+                | ((plln & 0x1FF) << 6) // PLLN bits 14:6
+                | (pllp << 16)          // PLLP bits 17:16
+                | (pllsrc << 22)        // PLLSRC bit 22
+                | ((pllq & 0xF) << 24); // PLLQ bits 27:24
+
+    // Enable PLL
+    RCC->CR |= (0x1 << 24); // PLL on
+
+    uint32_t timeout = 1000000;
+    while((RCC->CR & (0x1 << 25)) == 0 && --timeout); // wait until PLLRDY = 1
+
+    // Set PLL as SYSCLK, so 0b10 in SW bits
+    RCC->CFGR &= ~0x3; // clear SW
+    RCC->CFGR |= 0b10; // PLL Selected
+    
+    // Wait until PLL used as SYSCLK (SWS bits 3:2 = 10)
+    while ((RCC->CFGR & 0xC) != 0x8);
+
+
+}
+
+
+
+/*
     Getting system clock frequency used at a time.
 
-    @return Returns clock frequency in MHz.
+    @return Returns clock frequency in Hz.
 */
 uint32_t get_sys_clk_freq() {
     uint32_t sysclk = 0;
-    uint32_t cfgr = RCC_CFGR; // RCC->CFGR, read the register
+    uint32_t cfgr = RCC->CFGR; // RCC->CFGR
     uint8_t sws = (cfgr >> 2) & 0x3;
 
-    uint32_t pllcfgr, pllsrc, pllm, plln, pllp_bits, pllp, pll_input_freq;
+    uint32_t pllcfgr, pllsrc, pllm, plln, pllp_bits, pllp;
+    uint64_t pll_vco, pll_output;
+    uint32_t pll_input_freq;
 
     switch(sws) {
-        // HSI used
-        case 0x0:
+        case 0x0: // HSI
             sysclk = HSI_FREQ;
             break;
-        
-        // HSE used
-        case 0x1:
+
+        case 0x1: // HSE
             sysclk = HSE_FREQ;
             break;
 
-        // PLL used
-        case 0x2:
-            // PLL output frequency = (PLL input frequency / PLLM) * PLLN / PLLP
-            pllcfgr = RCC_PLLCFGR;
+        case 0x2: // PLL
+            pllcfgr = RCC->PLLCFGR;
+            pllsrc = (pllcfgr >> 22) & 0x1;
+            pllm = pllcfgr & 0x3F;
+            plln = (pllcfgr >> 6) & 0x1FF;
+            pllp_bits = (pllcfgr >> 16) & 0x3;
 
-            pllsrc = (pllcfgr >> 22) & 0x1; // Bit 22
-            pllm = pllcfgr & 0x3F; // Bits 5:0
-            plln = (pllcfgr >> 6) & 0x1FF; // Bits 14:6
-            pllp_bits = (pllcfgr >> 16) & 0x3; // Bits 17:16
+            if(pllm == 0) return 0; // avoid division by zero
 
-            pllp = (pllp_bits + 1) * 2;
+            switch(pllp_bits) {
+                case 0: pllp = 2; break;
+                case 1: pllp = 4; break;
+                case 2: pllp = 6; break;
+                case 3: pllp = 8; break;
+                default: pllp = 2; break;
+            }
 
             pll_input_freq = (pllsrc == 0) ? HSI_FREQ : HSE_FREQ;
 
-            sysclk = (pll_input_freq / pllm) * plln / pllp;
+            pll_vco = ((uint64_t)pll_input_freq / pllm) * plln;
+            pll_output = pll_vco / pllp;
 
+            sysclk = (uint32_t)pll_output;
             break;
 
-        // Other cases
         default:
+            sysclk = 0; // unknown clock source
             break;
     }
 
@@ -57,34 +119,100 @@ uint32_t get_sys_clk_freq() {
         2, 4, 8, 16, 64, 128, 256, 512
     };
 
-    sysclk /= HPRE_table[hpre];
+    if(hpre < 16)
+        sysclk /= HPRE_table[hpre];
 
     return sysclk;
 }
 
 
+// Delay helper functions
+// void delay_short(uint32_t time, TIM_Typedef tim);
+// void delay_long(uint32_t time, TIM_Typedef tim);
+
+TIM_Typedef* get_available_tim_long();
+
+void wait(uint32_t time, TIM_Typedef* tim);
+
 /*
-    Delay function, meant to stop the process for given amount of time.
+    Stops code execution for <time> ammount of milliseconds. Uses TIMx hardware clock to count the time. Uses either TIM3 or TIM5 counter.
 
-    STM32F used is a 100 MHz MCU meaning 1 clock cycle takes 10 ns. 1 "NOP" instruction takes 1 clock cycle.
-    10 ns = 0.00001 ms (1 * 10^(-5)).
+    TODO: for whatever reason delay is 4 times too fast.
+    TODO: turn off TIMx RCC clock after delay ends, not after each wait() call.
 
-    @param uint32_t time Delay time in ms.
-    @returns void No return value.
+    @param uint32_t time Time in milliseconds.
 */
 void delay(uint32_t time) {
     if(time == 0) return;
 
-    uint32_t sysclk_freq = get_sys_clk_freq();
-    uint32_t cycles_per_ms = sysclk_freq / 1000;
+    TIM_Typedef* tim;
 
-    while(time--) {
-        uint32_t num_nop = cycles_per_ms;
+    if(time > 30000) tim = get_available_tim_long();
 
-        while(num_nop--)
-            __asm("nop");
+    uint32_t max_time = 4000000;
+    uint32_t loop_ammount = (uint32_t)(time / max_time);
+
+    while(loop_ammount--) {
+        wait(time, tim);
+        time -= max_time;
     }
 }
+
+/*
+    Get either TIM2 or TIM5, depending on which one is available to use.
+*/
+TIM_Typedef* get_available_tim_long() {
+    // Check by RCC bus, TIM with disabled RCC bus is free to use
+    if((RCC->APB1ENR & 0x1) == 0) return TIM2;
+    if((RCC->APB1ENR & 0b1000) == 0) return TIM5;
+
+    // Both busses are on, check by TIMx CR register
+    if((TIM2->CR1 & 0x1) == 0) return TIM2; // TIM2 CR1 CEN bit is set to 0 meaning it's not in use
+    if((TIM5->CR1 & 0x1) == 0) return TIM5; // TIM5 CR1 CEN bit is set to 0 meaning it's not in use
+
+    return ((void*)0);
+}
+
+/*
+    Delay helper function. Sets up TIMx timer for 1000 Hz frequency.
+
+    @param uint32_t time Delay duration in ms.
+    @param TIM_Typedef* tim Tim that will be used.
+
+    TODO: Check PSC and ARR values in comments below
+*/
+void wait(uint32_t time, TIM_Typedef* tim) {
+    uint32_t sysclk_freq = get_sys_clk_freq();
+    uint32_t cfgr = RCC->CFGR;
+
+    uint32_t ppre1_bits = (cfgr >> 10) & 0x7;
+    uint32_t apb1_prescaler = (ppre1_bits < 4) ? 1 : (1 << (ppre1_bits - 3));
+
+    uint32_t pclk1 = sysclk_freq / apb1_prescaler;
+    uint32_t tim3_clk = (apb1_prescaler == 1) ? pclk1 : (pclk1 * 2);
+
+    uint32_t desired_tick = 1000; // 1 kHz = 1ms per tick
+    uint32_t prescaler =(tim3_clk / desired_tick) - 1;
+
+    // For now using only TIM3, BUS APB1 - Turn it on!!
+    RCC->APB1ENR |= (0x1 << 1); // Turn TIM3 clock in RCC
+    TIM3->CR1 &= ~(0x1); // Disable TIM3 clock, optional
+
+    // TODO: test PSC 42000 - 1, ARR 2000 - 1 for 1Hz frequency
+    TIM3->PSC = prescaler;
+    TIM3->CNT = 0; // reset count, just in case
+    TIM3->ARR = time - 1; // Overflow just when time passed (time - 1 because CNT goes from 0, obviously)
+    TIM3->EGR |= 0x1; // Generate update event - load ARR and PSC, otherwise they stay in a buffer and are not loaded!
+
+    TIM3->CR1 |= 0x1; // Enable clock
+    TIM3->SR &= ~0x1; // reset UIF flag
+
+    while((TIM3->SR & 0x1) == 0); // Wait for UIF flag to be set
+    TIM3->CR1 &= ~0x1; // Stop the counter
+
+    RCC->APB1ENR &= ~(0x1 << 1); // Turn off RCC clock for TIM3 - saves power.
+}
+
 
 /*
     Enables clock for given GPIO bus. For ease of use a bus can be selected as a number, which then becomes a bitshift offset as per AHB1ENR register memory map.
@@ -94,5 +222,5 @@ void delay(uint32_t time) {
 void enable_gpio_clock(GPIO_Bus_t bus) {
     if(bus > GPIOD_en) return; // Handle incorrect bus selection
 
-    RCC_AHB1ENR |= (0x1 << bus);
+    RCC->AHB1ENR |= (0x1 << bus);
 }
