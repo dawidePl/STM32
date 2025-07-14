@@ -18,10 +18,14 @@ void initialize_pll_clk() {
     // Switch to HSI
     RCC->CFGR &= ~0x3;
     RCC->CFGR |= 0x0; // HSI selected
-    while(((RCC->CFGR >> 2) & 0x3) != 0);
+    while(((RCC->CFGR >> 2) & 0x3) != 0); // Wait for the switch to happen
 
     RCC->CR &= ~(0x1 << 24); // PLL off
     while(RCC->CR & (0x1 << 25)); // Wait for PLLRDY = 0
+
+    RCC->CFGR &= ~(0b1111 << 4); // HPRE set to 1
+    RCC->CFGR &= ~(0b111 << 10); // clear PPRE1
+    RCC->CFGR |= (0b100 << 10); // PPRE1 set to 2
 
     // PLLM = 16 (bits 5:0)
     // PLLN = 168 (bits 14:6)
@@ -146,17 +150,22 @@ void wait(uint32_t time, TIM_Typedef* tim);
 void delay(uint32_t time) {
     if(time == 0) return;
 
-    TIM_Typedef* tim;
+    TIM_Typedef* tim = get_available_tim();
+    uint8_t tim_num = tim == TIM2 ? 2 : 5;
 
-    tim = get_available_tim();
+    // Turn on RCC clock for TIM2/5
+    RCC->APB1ENR |= (tim_num == 2) ? (0x1) : (0x1 << 3);
 
     uint32_t max_time = 4000000;
-    uint32_t loop_ammount = (uint32_t)(time / max_time);
+    uint32_t loop_ammount = (uint32_t)((time / max_time) + 1);
 
     while(loop_ammount--) {
         wait(time, tim);
         time -= max_time;
     }
+
+    // Turn off RCC clock for TIM2/5
+    RCC->APB1ENR &= (tim_num == 2) ? ~(0x1) : ~(0x1 << 3);
 }
 
 /*
@@ -176,12 +185,10 @@ TIM_Typedef* get_available_tim() {
 }
 
 /*
-    Delay helper function. Sets up TIMx timer for 1000 Hz frequency.
+    Delay helper function. Sets up TIMx timer for 10000 Hz (1KHz) frequency.
 
     @param uint32_t time Delay duration in ms.
     @param TIM_Typedef* tim Tim that will be used.
-
-    TODO: Check PSC and ARR values in comments below
 */
 void wait(uint32_t time, TIM_Typedef* tim) {
     uint32_t sysclk_freq = get_sys_clk_freq();
@@ -191,28 +198,23 @@ void wait(uint32_t time, TIM_Typedef* tim) {
     uint32_t apb1_prescaler = (ppre1_bits < 4) ? 1 : (1 << (ppre1_bits - 3));
 
     uint32_t pclk1 = sysclk_freq / apb1_prescaler;
-    uint32_t tim3_clk = (apb1_prescaler == 1) ? pclk1 : (pclk1 * 2);
+    uint32_t tim_clk = (apb1_prescaler == 1) ? pclk1 : (pclk1 * 2);
 
-    uint32_t desired_tick = 1000; // 1 kHz = 1ms per tick
-    uint32_t prescaler =(tim3_clk / desired_tick) - 1;
+    uint32_t desired_tick = 10000; // 10 kHz = 0.1ms per tick
+    uint32_t prescaler = (tim_clk / desired_tick) - 1;
 
-    // For now using only TIM3, BUS APB1 - Turn it on!!
-    RCC->APB1ENR |= (0x1 << 1); // Turn TIM3 clock in RCC
-    TIM3->CR1 &= ~(0x1); // Disable TIM3 clock, optional
+    tim->CR1 &= ~(0x1); // Disable TIM3 clock, optional
 
-    // TODO: test PSC 42000 - 1, ARR 2000 - 1 for 1Hz frequency
-    TIM3->PSC = prescaler;
-    TIM3->CNT = 0; // reset count, just in case
-    TIM3->ARR = time - 1; // Overflow just when time passed (time - 1 because CNT goes from 0, obviously)
-    TIM3->EGR |= 0x1; // Generate update event - load ARR and PSC, otherwise they stay in a buffer and are not loaded!
+    tim->PSC = prescaler;
+    tim->CNT = 0; // reset count, just in case
+    tim->ARR = (time * 10) - 1; // Overflow just when time passed (time is multiplied by 10 because tick rate is at 10 KHz, so we need to adjust for that!)
+    tim->EGR |= 0x1; // Generate update event - load ARR and PSC, otherwise they stay in a buffer and are not loaded!
 
-    TIM3->CR1 |= 0x1; // Enable clock
-    TIM3->SR &= ~0x1; // reset UIF flag
+    tim->CR1 |= 0x1; // Enable clock
+    tim->SR &= ~0x1; // reset UIF flag
 
-    while((TIM3->SR & 0x1) == 0); // Wait for UIF flag to be set
-    TIM3->CR1 &= ~0x1; // Stop the counter
-
-    RCC->APB1ENR &= ~(0x1 << 1); // Turn off RCC clock for TIM3 - saves power.
+    while((tim->SR & 0x1) == 0); // Wait for UIF flag to be set
+    tim->CR1 &= ~0x1; // Stop the counter
 }
 
 
