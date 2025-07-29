@@ -223,8 +223,8 @@ void wait(uint32_t time, TIM_Typedef* tim) {
 
     @param GPIO_Bus_t bus Goes as letters from A to D where bus A is 0, increment by one for each bus.
 */
-void enable_gpio_clock(GPIO_Bus_t bus) {
-    if(bus > GPIOD_en) return; // Handle incorrect bus selection
+void enable_gpio_clock(uint8_t port_index) {
+    if(port_index > GPIOC_en) return; // Handle incorrect bus selection
 
-    RCC->AHB1ENR |= (0x1 << bus);
+    RCC->AHB1ENR |= (0x1 << port_index);
 }

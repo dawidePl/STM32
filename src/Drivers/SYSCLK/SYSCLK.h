@@ -87,4 +87,4 @@ void initialize_pll_clk();
 uint32_t get_sys_clk_freq();
 
 void delay(uint32_t time);
-void enable_gpio_clock(GPIO_Bus_t bus);
+void enable_gpio_clock(uint8_t port_index);

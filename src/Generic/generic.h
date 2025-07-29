@@ -12,6 +12,6 @@ typedef enum {
     GPIOB_en = 1,
     GPIOC_en = 2,
     GPIOD_en = 3
-} GPIO_Bus_t;
+} GPIO_Port_t;
 
 void register_write(uint32_t addr, uint32_t data);

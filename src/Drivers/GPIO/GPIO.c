@@ -1,99 +1,100 @@
 #include "Drivers/GPIO/GPIO.h"
 
-void initialize_gpio_pin_output(GPIO_Bus_t bus, uint8_t pin_number);
-void initialize_gpio_pin_input(GPIO_Bus_t bus, uint8_t pin_number);
 
-volatile GPIO_Typedef* get_bus(GPIO_Bus_t bus) {
-    switch(bus) {
-        case GPIOA_en: return GPIOA;
-        case GPIOB_en: return GPIOB;
-        case GPIOC_en: return GPIOC;
-        case GPIOD_en: return GPIOD;
-        default: return ((void*)0);
+GPIO_Typedef* get_abstracted_port(GPIO_Pin_t pin) {
+    uint8_t port_index = (pin >> 4) & 0x0F;
+    
+    if(port_index < sizeof(gpio_port) / sizeof(gpio_port[0]))
+        return gpio_port[port_index];
+
+    return (void*)(0);
+}
+
+uint8_t get_abstracted_pin(GPIO_Pin_t pin) {
+    return pin & 0x0F;
+}
+
+uint8_t get_port_index(GPIO_Pin_t pin) {
+    return (pin >> 4) & 0x0F;
+}
+
+
+
+/*
+    Turn on bus clock for given port.
+*/
+void initialize_gpio_port(GPIO_Pin_t pin) {
+    uint8_t port_index = get_port_index(pin);
+
+    enable_gpio_clock(port_index);
+}
+
+
+void initialize_gpio_pin(GPIO_Pin_t pin, GPIO_Mode_t mode) {
+    uint8_t port_index = get_port_index(pin);
+    uint8_t pin_number = get_abstracted_pin(pin);
+    GPIO_Typedef* gpio = get_abstracted_port(pin);
+
+    if(!gpio) return; // TODO: use PC13 (in-built LED) to signal some error. To implement in further OS implementation
+
+    // Initialize port if it's not
+    if(((RCC->AHB1ENR >> port_index) & 0x01) != 0x1)
+        initialize_gpio_port(pin);
+    
+
+    // Reset MODE register. This makes pin mode INPUT as MODE register is set to 0b00 (input mode as per docs)
+    gpio->MODER &= ~(0x3 << (pin_number * 2));
+
+    if(mode == OUTPUT) {
+        gpio->MODER |= (0x1 << (pin_number * 2)); // Set "general purpose output mode" (0b01, 0x1)
+
+        // Set GPIO Output Type register, bits [31:16] RESERVED, set OTYPER to push-pull (0x0)
+        gpio->OTYPER &= ~(0x1 << pin_number);
+
+        // Not really needed, but set GPIO OSPEED register to medium speed (0b01)
+        gpio->OSPEEDR &= ~(0x3 << (pin_number * 2));
+        gpio->OSPEEDR |= (0x1 << (pin_number * 2));
     }
 }
 
-/*
-    Busses A, B, C wont be initialized until they are used.
-    Bus initialization (for now?) basically means turning on given bus clock.
 
-    @param GPIO_Bus_t bus Bus to enable.
-*/
+void gpio_write(GPIO_Pin_t pin, GPIO_DState_t state) {
+    uint8_t port_index = get_port_index(pin);
+    uint8_t pin_number = get_abstracted_pin(pin);
+    GPIO_Typedef* gpio = get_abstracted_port(pin);
 
-void initialize_gpio_bus(GPIO_Bus_t bus) {
-    if(bus > GPIOD_en) return;
+    if(!gpio) return; // TODO: use PC13 (in-built LED) to signal some error. To implement in further OS implementation
 
-    enable_gpio_clock(bus);
-}
-
-
-void initialize_gpio_pin(GPIO_Bus_t bus, uint8_t pin_number, bool input) {
-    // First check bus sanity
-    if(bus > GPIOD_en) return; // Handle incorrect bus
-
-    // Check if given bus is turned on, if not - turn it on
-    if(((RCC->AHB1ENR >> bus) & 0x1) != 0x1)
-        initialize_gpio_bus(bus);
-
-    if(input == false)
-        initialize_gpio_pin_output(bus, pin_number);
-    else
-        initialize_gpio_pin_input(bus, pin_number);
-
-    return;
-}
-
-void initialize_gpio_pin_output(GPIO_Bus_t bus, uint8_t pin_number) {
-    volatile GPIO_Typedef* gpio = get_bus(bus); // Get GPIO pin
+    // Initialize port if it's not
+    if(((RCC->AHB1ENR >> port_index) & 0x01) != 0x1)
+        initialize_gpio_port(pin);
     
-    // Set GPIOA MODE register to GPOM (General Purpose Output Mode)
-    gpio->MODER &= ~(0x3 << (pin_number * 2)); // Reset register bits
-    gpio->MODER |= (0x1 << (pin_number * 2)); // Set "general purpose output mode"
-
-    // Set GPIOA Output Type register, bits [31:16] RESERVED, set OTYPER to push-pull (0x0)
-    gpio->OTYPER &= ~(0x1 << pin_number); // Reset register bits, since reset sets bit to 0, no need for 2nd instruction, as above
-
-    // Not really needed, but set GPIOA OSPEED register to medium speed (0b01)
-    gpio->OSPEEDR &= ~(0x3 << (pin_number * 2));
-    gpio->OSPEEDR |= (0x1 << (pin_number * 2));
+    if(state == 0) gpio->BSRR = (1 << (pin_number + 16));
+    else gpio->BSRR = (1 << pin_number);
 }
 
-// TODO: implement, not needed now
-void initialize_gpio_pin_input(GPIO_Bus_t pin, uint8_t pin_number) {
-    return;
-}
+uint8_t gpio_read(GPIO_Pin_t pin) {
+    uint8_t port_index = get_port_index(pin);
+    uint8_t pin_number = get_abstracted_pin(pin);
+    GPIO_Typedef* gpio = get_abstracted_port(pin);
 
-/*
-    Sets given GPIO pin. Writing to upper 16 bits [31:16] resets given pin, writing tolower 16 bits [15:0] sets given pin.
+    if(!gpio) return 0xFF; // TODO: use PC13 (in-built LED) to signal some error. To implement in further OS implementation
 
-    @param GPIO_Bus_t bus Selects bus to write to.
-    @param uint8_t pin_number Selects pin to write to.
-    @param bool value If 0 resets BSSR bit, if 1 sets. (0 = LOW, 1 = HIGH)
-*/
-void gpio_set(GPIO_Bus_t bus, uint8_t pin_number, bool value) {
-    // Bus sanity check
-    if(bus > GPIOD_en) return;
-
-    // pin sanity check
-    if(bus == GPIOA_en || bus == GPIOB_en) {
-        if(pin_number > 15)
-            return;
-    }else if(bus == GPIOC_en) {
-        if(pin_number < 13 || pin_number > 15)
-        return;
-    }
-
-    volatile GPIO_Typedef* gpio = get_bus(bus);
-
-    // If not initialized as output
-    if(((gpio->MODER >> (pin_number * 2)) & 0x3) != 0x1)
-        initialize_gpio_pin(bus, pin_number, false);
+    // Initialize port if it's not
+    if(((RCC->AHB1ENR >> port_index) & 0x01) != 0x1)
+        initialize_gpio_port(pin);
     
-    // Reset pin
-    if(value == 0)
-        gpio->BSRR |= (1 << (pin_number + 16));
-    else
-        gpio->BSRR |= (1 << pin_number); // Set pin
-
-    return;
+    return ((gpio->IDR >> pin_number) & 0x1);
 }
+
+
+void digitalWrite(GPIO_Pin_t pin, GPIO_DState_t state) {
+    gpio_write(pin, state);
+}
+
+GPIO_DState_t digitalRead(GPIO_Pin_t pin) {
+    return (GPIO_DState_t)gpio_read(pin);
+}
+
+void analogWrite(GPIO_Pin_t pin, uint8_t value);
+uint8_t analogRead(GPIO_Pin_t pin);

@@ -28,7 +28,42 @@ typedef struct {
 #define GPIOD ((GPIO_Typedef *) GPIOD_BASE)
 
 
-void initialize_gpio_bus(GPIO_Bus_t bus);
-void initialize_gpio_pin(GPIO_Bus_t bus, uint8_t pin_number, bool input);
+// Pin abstraction layer
+static GPIO_Typedef* const gpio_port[] = {
+    GPIOA,
+    GPIOB,
+    GPIOC
+};
 
-void gpio_set(GPIO_Bus_t bus, uint8_t pin_number, bool value);
+#define MAKE_PIN(port_char, pin_number) ((((port_char) - 'A') << 4) | ((pin_number) & 0x0F))
+#define GPIO_ABSTRACT_PIN_LIST(X) \
+    X(A, 0)  X(A, 1)  X(A, 2)  X(A, 3)  X(A, 4)  X(A, 5)  X(A, 6)  X(A, 7)  X(A, 8)  X(A, 9)  X(A, 10) X(A, 11) X(A, 12) \
+    X(B, 0)  X(B, 1)  X(B, 2)  X(B, 3)  X(B, 4)  X(B, 5)  X(B, 6)  X(B, 7)  X(B, 8)  X(B, 9)  X(B, 10) X(B, 11) X(B, 12) \
+    X(C, 13) X(C, 14) X(C, 15)
+
+typedef enum {
+    #define X(port, pin) port##pin = MAKE_PIN(#port[0], pin),
+        GPIO_ABSTRACT_PIN_LIST(X)
+    #undef X
+} GPIO_Pin_t;
+
+
+GPIO_Typedef* get_abstracted_port(GPIO_Pin_t pin);
+uint8_t get_abstracted_pin(GPIO_Pin_t pin);
+
+
+// Pin modes
+
+typedef enum {LOW = 0, HIGH = 1} GPIO_DState_t;
+typedef enum {INPUT, OUTPUT} GPIO_Mode_t;
+
+
+// Low-level (kernel) functions
+
+void initialize_gpio_pin(GPIO_Pin_t pin, GPIO_Mode_t mode);
+
+void digitalWrite(GPIO_Pin_t pin, GPIO_DState_t state);
+GPIO_DState_t digitalRead(GPIO_Pin_t pin);
+
+void analogWrite(GPIO_Pin_t pin, uint8_t value);
+uint8_t analogRead(GPIO_Pin_t pin);
